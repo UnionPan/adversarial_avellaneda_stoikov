@@ -1,496 +1,219 @@
 """
-Kraken Data Fetcher for Cryptocurrency Historical Data
+Kraken Public API Fetcher for OHLCV Data
 
-Fetch OHLCV data directly from Kraken exchange.
+Fetches historical OHLCV data from Kraken's public API.
 
-Advantages:
-- NO API key required for public data
-- NO geo-blocking (works globally)
-- Real exchange data (not aggregated)
-- Very reliable and well-documented
-- High rate limits
+API Documentation: https://docs.kraken.com/rest/#tag/Market-Data/operation/getOHLCData
 
-Kraken API Docs: https://docs.kraken.com/rest/
-
-author: Yunian Pan
-email: yp1170@nyu.edu
+Author: Yunian Pan
+Email: yp1170@nyu.edu
 """
 
 import requests
 import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta, date
-from typing import Optional, Dict, List
 import time
-import warnings
+from typing import Optional
+from datetime import datetime, timedelta
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class KrakenFetcher:
     """
-    Fetch cryptocurrency historical data from Kraken exchange.
+    Fetch OHLCV data from Kraken exchange.
 
-    Public API (no authentication required):
-    - Historical OHLCV data
-    - Ticker information
-    - Trading pairs
-
-    Rate Limits:
-    - Very generous for public endpoints
-    - No geo-blocking
+    API limits:
+    - Public endpoints: No strict rate limit, but recommended 1 req/sec
+    - OHLC data: Returns up to 720 candles per request
+    - Available intervals: 1, 5, 15, 30, 60, 240, 1440, 10080, 21600 (minutes)
 
     Example:
-        >>> fetcher = KrakenFetcher()
-        >>> # Get Bitcoin data
-        >>> btc_data = fetcher.get_ohlcv('XXBTZUSD', interval=1440, days=365)
-        >>> print(btc_data.head())
-        >>>
-        >>> # Get multiple cryptocurrencies
-        >>> cryptos = fetcher.get_multiple(['XXBTZUSD', 'XETHZUSD'], days=90)
+        fetcher = KrakenFetcher()
+        df = fetcher.get_ohlcv('XXBTZUSD', interval=5, days=7)
+        print(df.head())
     """
 
     BASE_URL = "https://api.kraken.com/0/public"
 
-    # Popular trading pairs (Kraken symbol: description)
-    POPULAR_PAIRS = {
-        'XXBTZUSD': 'Bitcoin/USD',
-        'XETHZUSD': 'Ethereum/USD',
-        'XLTCZUSD': 'Litecoin/USD',
-        'XXRPZUSD': 'Ripple/USD',
-        'ADAUSD': 'Cardano/USD',
-        'SOLUSD': 'Solana/USD',
-        'DOTUSD': 'Polkadot/USD',
-        'MATICUSD': 'Polygon/USD',
-        'AVAXUSD': 'Avalanche/USD',
-        'LINKUSD': 'Chainlink/USD',
-        'ATOMUSD': 'Cosmos/USD',
-        'UNIUSD': 'Uniswap/USD',
-    }
-
-    # Interval mapping (minutes)
-    INTERVALS = {
-        1: '1 minute',
-        5: '5 minutes',
-        15: '15 minutes',
-        30: '30 minutes',
-        60: '1 hour',
-        240: '4 hours',
-        1440: '1 day',
-        10080: '1 week',
-        21600: '15 days',
-    }
-
-    def __init__(
-        self,
-        rate_limit_delay: float = 0.2,
-        verbose: bool = True,
-    ):
+    def __init__(self, rate_limit_delay: float = 1.0):
         """
         Initialize Kraken fetcher.
 
         Args:
-            rate_limit_delay: Delay between API calls in seconds (default 0.2s)
-            verbose: Print progress messages
+            rate_limit_delay: Delay between requests (seconds)
         """
         self.rate_limit_delay = rate_limit_delay
-        self.verbose = verbose
-        self.last_request_time = 0
-
-    def _rate_limit(self):
-        """Enforce rate limiting between API calls."""
-        elapsed = time.time() - self.last_request_time
-        if elapsed < self.rate_limit_delay:
-            time.sleep(self.rate_limit_delay - elapsed)
-        self.last_request_time = time.time()
-
-    def _make_request(self, endpoint: str, params: Dict = None) -> Dict:
-        """
-        Make API request with error handling.
-
-        Args:
-            endpoint: API endpoint (e.g., 'OHLC', 'Ticker')
-            params: Query parameters
-
-        Returns:
-            JSON response as dictionary
-
-        Raises:
-            requests.HTTPError: If request fails
-        """
-        self._rate_limit()
-
-        url = f"{self.BASE_URL}/{endpoint}"
-
-        try:
-            response = requests.get(url, params=params, timeout=30)
-            response.raise_for_status()
-            data = response.json()
-
-            # Check for Kraken API errors
-            if data.get('error') and len(data['error']) > 0:
-                raise ValueError(f"Kraken API error: {data['error']}")
-
-            return data['result']
-
-        except requests.exceptions.HTTPError as e:
-            if response.status_code == 429:
-                warnings.warn("Rate limit exceeded. Waiting 60 seconds...")
-                time.sleep(60)
-                return self._make_request(endpoint, params)  # Retry
-            else:
-                raise e
-
-        except requests.exceptions.RequestException as e:
-            raise Exception(f"API request failed: {e}")
+        self.session = requests.Session()
 
     def get_ohlcv(
         self,
-        pair: str,
-        interval: int = 1440,
-        days: Optional[int] = 365,
-        start_date: Optional[date] = None,
-        end_date: Optional[date] = None,
+        pair: str = 'XXBTZUSD',
+        interval: int = 5,  # Minutes
+        days: Optional[int] = None,
         since: Optional[int] = None,
     ) -> pd.DataFrame:
         """
-        Get OHLCV (candlestick) data for a trading pair.
+        Fetch OHLCV data.
 
         Args:
-            pair: Trading pair (e.g., 'XXBTZUSD', 'XETHZUSD')
-                 Use Kraken symbols! Find with list_trading_pairs()
-            interval: Candlestick interval in minutes (default 1440 = 1 day)
-                     Options: 1, 5, 15, 30, 60, 240, 1440, 10080, 21600
-            days: Number of days of history (ignored if start_date/since provided)
-            start_date: Start date (optional, overrides days)
-            end_date: End date (optional, defaults to now)
-            since: Start timestamp in seconds (optional; overrides start_date/days)
+            pair: Trading pair (e.g., 'XXBTZUSD' for BTC/USD, 'XETHZUSD' for ETH/USD)
+            interval: Candle interval in minutes (1, 5, 15, 30, 60, 240, 1440, 10080, 21600)
+            days: Fetch last N days of data
+            since: Unix timestamp to fetch from
 
         Returns:
-            DataFrame with columns: Date, Open, High, Low, Close, Volume
+            DataFrame with columns:
+            - Date: Datetime index
+            - Open, High, Low, Close: OHLC prices
+            - Volume: Trading volume
+            - count: Number of trades
 
-        Example:
-            >>> # Last 365 days of daily data
-            >>> btc = fetcher.get_ohlcv('XXBTZUSD', interval=1440, days=365)
-            >>>
-            >>> # 4-hour candles for last 30 days
-            >>> btc = fetcher.get_ohlcv('XXBTZUSD', interval=240, days=30)
-            >>>
-            >>> # Specific date range
-            >>> btc = fetcher.get_ohlcv('XXBTZUSD', start_date=date(2018, 1, 1), end_date=date.today())
+        Note:
+            Kraken pair names use 'X' prefix for crypto (XXBTZUSD = BTC/USD)
+            Common pairs: XXBTZUSD, XETHZUSD, XXRPZUSD, etc.
         """
-        if self.verbose:
-            interval_desc = self.INTERVALS.get(interval, f'{interval} minutes')
-            print(f"Fetching {pair} OHLC data ({interval_desc} interval)...")
+        all_candles = []
 
-        # Validate interval
-        if interval not in self.INTERVALS:
-            raise ValueError(
-                f"Invalid interval: {interval}. "
-                f"Options: {', '.join(map(str, self.INTERVALS.keys()))}"
-            )
+        # Calculate since from days if provided
+        if days is not None and since is None:
+            since = int((datetime.now() - timedelta(days=days)).timestamp())
 
-        # Determine date range
-        if end_date is None:
-            end_dt = datetime.now()
-        else:
-            end_dt = datetime.combine(end_date, datetime.max.time())
+        params = {
+            'pair': pair,
+            'interval': interval,
+        }
 
         if since is not None:
-            start_dt = datetime.fromtimestamp(since)
-        elif start_date is not None:
-            start_dt = datetime.combine(start_date, datetime.min.time())
-            since = int(start_dt.timestamp())
-        else:
-            start_dt = end_dt - timedelta(days=days)
-            since = int(start_dt.timestamp())
+            params['since'] = since
 
-        # Fetch data with pagination using the `since` cursor
-        endpoint = "OHLC"
-        all_candles = []
-        cursor = since
+        logger.info(f"Fetching Kraken {pair} OHLCV data (interval={interval}m)...")
 
-        while True:
-            params = {
-                'pair': pair,
-                'interval': interval,
-                'since': cursor,
-            }
+        iterations = 0
+        max_iterations = 100  # Safety limit
 
-            result = self._make_request(endpoint, params)
+        while iterations < max_iterations:
+            try:
+                # Make request
+                url = f"{self.BASE_URL}/OHLC"
+                response = self.session.get(url, params=params)
+                response.raise_for_status()
 
-            # Kraken returns: {pair_name: [[time, open, high, low, close, vwap, volume, count], ...], 'last': ts}
-            pair_keys = [k for k in result.keys() if k != 'last']
-            pair_key = pair_keys[0] if pair_keys else None
-            if pair_key is None:
+                data = response.json()
+
+                if 'error' in data and data['error']:
+                    raise ValueError(f"Kraken API error: {data['error']}")
+
+                # Extract candles for the pair
+                # Kraken returns data['result'][pair_name] and data['result']['last']
+                result_key = list(data['result'].keys())[0]  # Get first key (pair name)
+                candles = data['result'][result_key]
+                last_timestamp = data['result']['last']
+
+                if not candles:
+                    logger.info("No more candles available")
+                    break
+
+                all_candles.extend(candles)
+                logger.info(f"Fetched {len(all_candles):,} candles (iteration {iterations+1})")
+
+                # Check if we've fetched all available data
+                if len(candles) < 720:  # Kraken returns up to 720 candles
+                    logger.info("Reached end of available data")
+                    break
+
+                # Update params for next request
+                params['since'] = last_timestamp
+
+                # Rate limiting
+                time.sleep(self.rate_limit_delay)
+
+                iterations += 1
+
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Error fetching OHLCV: {e}")
                 break
 
-            candles = result[pair_key]
-            if not candles:
-                break
-
-            all_candles.extend(candles)
-
-            # Advance cursor; Kraken's 'last' is the id of the last candle returned
-            last_cursor = result.get('last', candles[-1][0])
-
-            # Stop if we reached or passed the desired end date
-            if last_cursor >= int(end_dt.timestamp()):
-                break
-
-            # Prevent infinite loops
-            if last_cursor <= cursor:
-                break
-
-            cursor = last_cursor
-
-        # Create DataFrame
         if not all_candles:
-            raise ValueError(f"No data returned for {pair}")
+            raise ValueError(f"No OHLCV data fetched for {pair}")
 
-        df = pd.DataFrame(all_candles, columns=[
-            'time', 'Open', 'High', 'Low', 'Close', 'vwap', 'Volume', 'count'
-        ])
+        # Convert to DataFrame
+        # Kraken OHLC format: [time, open, high, low, close, vwap, volume, count]
+        df = pd.DataFrame(
+            all_candles,
+            columns=['timestamp', 'Open', 'High', 'Low', 'Close', 'vwap', 'Volume', 'count']
+        )
 
-        # Convert types
-        df['Date'] = pd.to_datetime(df['time'], unit='s')
-        df['Open'] = df['Open'].astype(float)
-        df['High'] = df['High'].astype(float)
-        df['Low'] = df['Low'].astype(float)
-        df['Close'] = df['Close'].astype(float)
-        df['Volume'] = df['Volume'].astype(float)
+        # Convert timestamp to datetime
+        df['Date'] = pd.to_datetime(df['timestamp'], unit='s')
 
-        # Select and reorder columns
-        df = df[['Date', 'Open', 'High', 'Low', 'Close', 'Volume']]
+        # Convert numeric columns
+        for col in ['Open', 'High', 'Low', 'Close', 'vwap', 'Volume']:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
 
-        # Filter to end date window (if provided)
-        df = df[(df['Date'] >= start_dt) & (df['Date'] <= end_dt)]
-        df = df.sort_values('Date').reset_index(drop=True)
+        df['count'] = pd.to_numeric(df['count'], errors='coerce').astype(int)
 
-        if self.verbose:
-            print(f"  Retrieved {len(df)} candles")
-            print(f"  Date range: {df['Date'].min()} to {df['Date'].max()}")
+        # Set Date as index and sort
+        df = df.set_index('Date').sort_index()
+
+        # Drop duplicate indices
+        df = df[~df.index.duplicated(keep='first')]
+
+        # Keep only essential columns
+        df = df[['Open', 'High', 'Low', 'Close', 'Volume', 'count']]
+
+        logger.info(f"Total candles fetched: {len(df):,}")
+        logger.info(f"Time span: {df.index[0]} to {df.index[-1]}")
 
         return df
 
-    def get_ticker(self, pairs: List[str]) -> Dict[str, Dict]:
+    def get_asset_pairs(self) -> pd.DataFrame:
         """
-        Get current ticker information for trading pairs.
-
-        Args:
-            pairs: List of trading pairs (e.g., ['XXBTZUSD', 'XETHZUSD'])
+        Get list of available trading pairs.
 
         Returns:
-            Dictionary mapping pair to ticker info
-
-        Example:
-            >>> tickers = fetcher.get_ticker(['XXBTZUSD', 'XETHZUSD'])
-            >>> btc_price = float(tickers['XXBTZUSD']['c'][0])
-            >>> print(f"BTC: ${btc_price:,.2f}")
+            DataFrame with pair information
         """
-        endpoint = "Ticker"
-        params = {'pair': ','.join(pairs)}
+        url = f"{self.BASE_URL}/AssetPairs"
+        response = self.session.get(url)
+        response.raise_for_status()
 
-        result = self._make_request(endpoint, params)
-        return result
+        data = response.json()
 
-    def get_current_price(self, pairs: List[str]) -> Dict[str, float]:
-        """
-        Get current price for trading pairs.
+        if 'error' in data and data['error']:
+            raise ValueError(f"Kraken API error: {data['error']}")
 
-        Args:
-            pairs: List of trading pairs
-
-        Returns:
-            Dictionary mapping pair to current price
-
-        Example:
-            >>> prices = fetcher.get_current_price(['XXBTZUSD', 'XETHZUSD'])
-            >>> print(f"BTC: ${prices['XXBTZUSD']:,.2f}")
-        """
-        tickers = self.get_ticker(pairs)
-
-        prices = {}
-        for pair_name, ticker_data in tickers.items():
-            # 'c' is the last trade closed array [price, lot volume]
-            prices[pair_name] = float(ticker_data['c'][0])
-
-        return prices
-
-    def get_multiple(
-        self,
-        pairs: List[str],
-        interval: int = 1440,
-        days: int = 365,
-    ) -> Dict[str, pd.DataFrame]:
-        """
-        Get OHLCV data for multiple trading pairs.
-
-        Args:
-            pairs: List of trading pairs
-            interval: Candlestick interval in minutes
-            days: Number of days of history
-
-        Returns:
-            Dictionary mapping pair to DataFrame
-
-        Example:
-            >>> cryptos = fetcher.get_multiple(
-            ...     ['XXBTZUSD', 'XETHZUSD', 'SOLUSD'],
-            ...     interval=1440,
-            ...     days=180
-            ... )
-            >>> btc_data = cryptos['XXBTZUSD']
-            >>> eth_data = cryptos['XETHZUSD']
-        """
-        results = {}
-
-        if self.verbose:
-            print(f"Fetching data for {len(pairs)} trading pairs...")
-
-        for pair in pairs:
-            try:
-                df = self.get_ohlcv(
-                    pair,
-                    interval=interval,
-                    days=days,
-                )
-                results[pair] = df
-            except Exception as e:
-                warnings.warn(f"Failed to fetch {pair}: {e}")
-                results[pair] = None
-
-        return results
-
-    def list_trading_pairs(self) -> pd.DataFrame:
-        """
-        List all available trading pairs.
-
-        Returns:
-            DataFrame with trading pair information
-
-        Example:
-            >>> pairs = fetcher.list_trading_pairs()
-            >>> # Filter for USD pairs
-            >>> usd_pairs = pairs[pairs['quote'] == 'USD']
-            >>> print(usd_pairs)
-        """
-        endpoint = "AssetPairs"
-
-        result = self._make_request(endpoint)
-
-        # Parse pairs
-        pairs_list = []
-        for pair_name, pair_info in result.items():
-            # Skip .d pairs (dark pool)
-            if pair_name.endswith('.d'):
-                continue
-
-            pairs_list.append({
-                'pair': pair_name,
-                'altname': pair_info.get('altname', ''),
-                'base': pair_info.get('base', ''),
-                'quote': pair_info.get('quote', ''),
-                'status': pair_info.get('status', ''),
-            })
-
-        return pd.DataFrame(pairs_list)
-
-    def search_pair(self, query: str) -> List[str]:
-        """
-        Search for trading pairs by base or quote asset.
-
-        Args:
-            query: Search term (e.g., 'BTC', 'ETH', 'USD')
-
-        Returns:
-            List of matching pair names
-
-        Example:
-            >>> # Find all BTC pairs
-            >>> btc_pairs = fetcher.search_pair('BTC')
-            >>> print(btc_pairs)
-        """
-        query_upper = query.upper()
-
-        pairs_df = self.list_trading_pairs()
-
-        # Search in pair name, base, and quote
-        matches = pairs_df[
-            pairs_df['pair'].str.contains(query_upper) |
-            pairs_df['altname'].str.contains(query_upper) |
-            pairs_df['base'].str.contains(query_upper) |
-            pairs_df['quote'].str.contains(query_upper)
-        ]['pair'].tolist()
-
-        return matches
-
-    def list_popular_pairs(self) -> pd.DataFrame:
-        """
-        List popular cryptocurrency trading pairs.
-
-        Returns:
-            DataFrame with pair and description
-
-        Example:
-            >>> pairs = fetcher.list_popular_pairs()
-            >>> print(pairs)
-        """
-        pairs = []
-        for pair, description in self.POPULAR_PAIRS.items():
-            pairs.append({
-                'pair': pair,
-                'description': description,
-            })
-
-        return pd.DataFrame(pairs)
+        pairs = data['result']
+        return pd.DataFrame.from_dict(pairs, orient='index')
 
 
-def download_bitcoin(
-    interval: int = 1440,
-    days: int = 365,
+def quick_fetch_kraken(
+    pair: str = 'XXBTZUSD',
+    interval: int = 5,
+    days: int = 7,
+    save_path: Optional[str] = None,
 ) -> pd.DataFrame:
     """
-    Convenience function to download Bitcoin data from Kraken.
+    Quick helper to fetch Kraken OHLCV data.
 
     Args:
-        interval: Data interval in minutes (default 1440 = 1 day)
-        days: Number of days (default 365)
+        pair: Trading pair (XXBTZUSD for BTC/USD)
+        interval: Candle interval in minutes
+        days: Days of history to fetch
+        save_path: Optional path to save CSV
 
     Returns:
-        DataFrame with Bitcoin OHLCV data
+        DataFrame with OHLCV data
 
     Example:
-        >>> from calibration.data import download_bitcoin
-        >>> btc = download_bitcoin(interval=1440, days=730)  # 2 years
+        df = quick_fetch_kraken('XXBTZUSD', interval=5, days=7)
+        print(df.head())
     """
     fetcher = KrakenFetcher()
-    return fetcher.get_ohlcv('XXBTZUSD', interval=interval, days=days)
+    df = fetcher.get_ohlcv(pair=pair, interval=interval, days=days)
 
+    if save_path is not None:
+        df.to_csv(save_path)
+        logger.info(f"Saved to {save_path}")
 
-def download_crypto_basket(
-    pairs: List[str] = None,
-    interval: int = 1440,
-    days: int = 365,
-) -> Dict[str, pd.DataFrame]:
-    """
-    Download data for a basket of cryptocurrencies from Kraken.
-
-    Args:
-        pairs: List of pairs (default: BTC, ETH, SOL)
-        interval: Data interval in minutes
-        days: Number of days
-
-    Returns:
-        Dictionary mapping pair to DataFrame
-
-    Example:
-        >>> basket = download_crypto_basket(
-        ...     pairs=['XXBTZUSD', 'XETHZUSD', 'SOLUSD'],
-        ...     days=180
-        ... )
-        >>> btc = basket['XXBTZUSD']
-    """
-    if pairs is None:
-        pairs = ['XXBTZUSD', 'XETHZUSD', 'SOLUSD']
-
-    fetcher = KrakenFetcher()
-    return fetcher.get_multiple(pairs, interval=interval, days=days)
+    return df

@@ -14,6 +14,11 @@ from .volatility import (
     VolatilityEstimator,
     GARCHEstimator,
     compare_volatility_methods,
+    parkinson_volatility,
+    garman_klass_volatility,
+    rogers_satchell_volatility,
+    yang_zhang_volatility,
+    compare_ohlc_estimators,
 )
 from .regime_switching_calibrator import (
     RegimeSwitchingCalibrator,
@@ -36,6 +41,11 @@ __all__ = [
     'VolatilityEstimator',
     'GARCHEstimator',
     'compare_volatility_methods',
+    'parkinson_volatility',
+    'garman_klass_volatility',
+    'rogers_satchell_volatility',
+    'yang_zhang_volatility',
+    'compare_ohlc_estimators',
 
     # Regime-switching
     'RegimeSwitchingCalibrator',
