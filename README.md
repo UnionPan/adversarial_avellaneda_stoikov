@@ -1,6 +1,7 @@
 # Adversarial Avellaneda-Stoikov
-
-A library for derivatives pricing, calibration, and reinforcement learning-based hedging strategies.
+A simulation for adversarial Avellaneda-Stoikov optimal inventory control with BTC as an example:
+![counterfactual_simulation_results.png](counterfactual_simulation_results.png)
+with the library for derivatives pricing, calibration, and reinforcement learning-based hedging strategies.
 
 ## Overview
 
@@ -307,3 +308,4 @@ Two data files must be present in project root (verified with `check_data.py`):
 3. **Mean-Averting Predator**: Optimal predator pushes price down when MM is long (q > 0), up when short (q < 0), maximizing MM's losses
 
 4. **Automatic Calibration Flow**: Parameters from real BTC market data automatically flow into simulation with no manual copying required
+
