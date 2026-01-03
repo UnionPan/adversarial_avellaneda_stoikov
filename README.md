@@ -264,31 +264,7 @@ Equilibrium achieves **more than double the profit** by quoting 73% wider spread
 - `results/counterfactual_simulation_summary.csv` - Performance metrics
 - `results/example_trajectory.csv` - Single trajectory details
 
-### How Automatic Parameter Loading Works
-
 The simulation script automatically loads parameters from CSV files created by calibration:
-
-**When CSVs exist (after running calibration):**
-```
-[1] Loading calibrated parameters...
-  ✓ Loaded regime parameters from: ../results/regime_parameters.csv
-  ✓ Loaded microstructure parameters from: ../results/microstructure_parameters.csv
-
-Parameter sources:
-  Regime parameters: ../results/regime_parameters.csv
-  Microstructure parameters: ../results/microstructure_parameters.csv
-```
-
-**When CSVs don't exist (standalone simulation):**
-```
-[1] Loading calibrated parameters...
-  ⚠ Using default regime parameters (run btc_regime_calibration.py first)
-  ⚠ Using default microstructure parameters (run gemini_microstructure_calibration.py first)
-
-Parameter sources:
-  Regime parameters: default
-  Microstructure parameters: default
-```
 
 ### Three Ways to Run
 
