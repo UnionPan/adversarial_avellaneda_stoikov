@@ -1,6 +1,6 @@
 # Adversarial Avellaneda-Stoikov
 
-A quantitative finance library for derivatives pricing, calibration, and reinforcement learning-based hedging strategies.
+A library for derivatives pricing, calibration, and reinforcement learning-based hedging strategies.
 
 ## Overview
 
@@ -157,10 +157,177 @@ adversarial_avellaneda_stoikov/
 
 ## Key Features
 
-- Clean separation of P-measure (physical) and Q-measure (risk-neutral) calibration
 - Model-driven synthetic option chain generation using Heston characteristic function
 - Comprehensive stochastic process library with regime-switching capabilities
-- Multiple pricing methods for cross-validation
-- Crypto-focused data fetchers (Kraken, Binance) with proper interval handling
+- Crypto-focused data fetchers (Kraken, Yfinance) with proper interval handling
 - Reinforcement learning framework for dynamic hedging
 - Market making strategies with adversarial training
+
+## Experiments: Double-Layer Market Making Game
+
+The `experiments/` directory contains a complete experimental pipeline for the **double-layer market making game** with regime switching and strategic predatory trading. This implements the theoretical framework from the research paper on games-in-games architecture.
+
+### Quick Start
+
+```bash
+cd experiments
+
+# Verify data files are present
+python check_data.py
+
+# Run full experimental pipeline (calibration → simulation)
+python run_all.py
+```
+
+### Experimental Workflow
+
+The experiments implement a **two-layer calibration → simulation pipeline** where calibrated parameters **automatically flow** into the counterfactual simulation:
+
+```
+┌─────────────────┐         ┌─────────────────┐
+│ Kraken 30-min   │         │ Gemini Tick     │
+│ OHLCV Data      │         │ Data            │
+└────────┬────────┘         └────────┬────────┘
+         │                           │
+         ▼                           ▼
+┌─────────────────┐         ┌─────────────────┐
+│ Layer 1: Regime │         │ Layer 2: Micro- │
+│ Calibration     │         │ structure Calib │
+│                 │         │                 │
+│ • σ_stable      │         │ • λ₀            │
+│ • σ_volatile    │         │ • κ             │
+│ • Transitions   │         │ • Trade size    │
+└────────┬────────┘         └────────┬────────┘
+         │                           │
+         │ SAVES                    │ SAVES
+         ▼                           ▼
+    regime_parameters.csv    microstructure_parameters.csv
+         │                           │
+         └───────────┬───────────────┘
+                     │ AUTO-LOADS
+                     ▼
+         ┌───────────────────────┐
+         │ Counterfactual        │
+         │ Simulation            │
+         │                       │
+         │ Vanilla AS vs         │
+         │ Equilibrium AS        │
+         └───────────────────────┘
+```
+
+#### Layer 1: Regime Calibration (Macro)
+**Script:** `calibration/btc_regime_calibration.py`
+
+Calibrates regime-switching parameters from **Kraken BTC-USD 30-minute OHLCV data**:
+- K-means clustering on rolling volatility
+- **Stable regime**: σ = 22.53% annualized
+- **Volatile regime**: σ = 53.05% annualized
+- Transition rate: 30/day (avg 48 min holding time)
+
+**Output:** `results/regime_parameters.csv`
+
+#### Layer 2: Microstructure Calibration (Micro)
+**Script:** `calibration/gemini_microstructure_calibration.py`
+
+Calibrates order flow from **Gemini BTC-USD tick data**:
+- Base arrival rate: λ₀ = 250,000/year (~42 trades/hour)
+- Spread sensitivity: κ = 10.0 for λ(δ) = λ₀·exp(-κδ)
+- Assumes 1/1000 market share for individual MM
+- Average trade size: 0.05 BTC
+
+**Output:** `results/microstructure_parameters.csv`
+
+#### Counterfactual Simulation
+**Script:** `adversarial_as/demo_counterfactual_simulation.py`
+
+Compares two market making strategies facing a **strategic predatory trader** over 12 hours (1,000 Monte Carlo paths):
+
+**Vanilla AS** (unaware of predator):
+- Uses actual volatility σ in standard Avellaneda-Stoikov formula
+
+**Equilibrium AS** (aware of predator):
+- Uses **effective volatility**: σ_eff² = σ² + ξγ
+- Based on "Risk Isomorphism" principle from paper
+
+**Key Results:**
+
+| Metric | Vanilla AS | Equilibrium AS | Improvement |
+|--------|-----------|----------------|-------------|
+| Mean PnL | $1,436 | $3,032 | **+111%** 🚀 |
+| Sharpe Ratio | 0.775 | 1.223 | **+58%** |
+| Avg Spread | 3.20 bps | 5.55 bps | +73% |
+
+Equilibrium achieves **more than double the profit** by quoting 73% wider spreads that compensate for predatory risk.
+
+**Outputs:**
+- `results/counterfactual_simulation_results.png` - 6-panel visualization (price, inventory, spreads, PnL, distributions)
+- `results/counterfactual_simulation_summary.csv` - Performance metrics
+- `results/example_trajectory.csv` - Single trajectory details
+
+### How Automatic Parameter Loading Works
+
+The simulation script automatically loads parameters from CSV files created by calibration:
+
+**When CSVs exist (after running calibration):**
+```
+[1] Loading calibrated parameters...
+  ✓ Loaded regime parameters from: ../results/regime_parameters.csv
+  ✓ Loaded microstructure parameters from: ../results/microstructure_parameters.csv
+
+Parameter sources:
+  Regime parameters: ../results/regime_parameters.csv
+  Microstructure parameters: ../results/microstructure_parameters.csv
+```
+
+**When CSVs don't exist (standalone simulation):**
+```
+[1] Loading calibrated parameters...
+  ⚠ Using default regime parameters (run btc_regime_calibration.py first)
+  ⚠ Using default microstructure parameters (run gemini_microstructure_calibration.py first)
+
+Parameter sources:
+  Regime parameters: default
+  Microstructure parameters: default
+```
+
+### Three Ways to Run
+
+**Option 1: Full Pipeline** (recommended for reproducibility)
+```bash
+python run_all.py
+```
+Executes: Regime calibration → Microstructure calibration → Simulation with auto-loaded parameters
+
+**Option 2: Simulation Only** (uses default parameters)
+```bash
+python adversarial_as/demo_counterfactual_simulation.py
+```
+Useful for testing parameter changes without re-running calibration
+
+**Option 3: Step-by-Step**
+```bash
+# Step 1: Calibrate regimes (creates regime_parameters.csv)
+python calibration/btc_regime_calibration.py
+
+# Step 2: Calibrate microstructure (creates microstructure_parameters.csv)
+python calibration/gemini_microstructure_calibration.py
+
+# Step 3: Run simulation (auto-loads CSVs from steps 1 & 2)
+python adversarial_as/demo_counterfactual_simulation.py
+```
+
+### Required Data Files
+
+Two data files must be present in project root (verified with `check_data.py`):
+- `kraken_btcusd_30m_7d.csv` - Kraken 30-min OHLCV (Dec 7-14, 2025)
+- `gemini_btcusd_full.parquet` - Gemini tick data (Dec 14, 2025)
+
+### Key Theoretical Insights
+
+1. **Risk Isomorphism**: Predator's adversarial drift w*(q) = -ξγq is mathematically equivalent to additional volatility: σ_eff² = σ² + ξγ
+
+2. **Strategic Spread Widening**: Equilibrium AS quotes 73% wider spreads to compensate for predatory risk, earning more profit per trade despite fewer fills
+
+3. **Mean-Averting Predator**: Optimal predator pushes price down when MM is long (q > 0), up when short (q < 0), maximizing MM's losses
+
+4. **Automatic Calibration Flow**: Parameters from real BTC market data automatically flow into simulation with no manual copying required

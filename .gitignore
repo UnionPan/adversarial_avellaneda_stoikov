@@ -182,14 +182,14 @@ $RECYCLE.BIN/
 *.sublime-workspace
 
 # Data files
-*.csv
+#*.csv
 *.xlsx
 *.xls
 *.h5
 *.hdf5
 *.pkl
 *.pickle
-*.parquet
+#*.parquet
 *.feather
 *.db
 
