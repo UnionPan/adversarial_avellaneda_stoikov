@@ -44,10 +44,6 @@ This repository implements a comprehensive framework for option pricing, stochas
 - Regime-Switching Heston Calibration
 - Synthetic Option Chain Generation
 
-**Data Providers**
-- Binance Historical Data Fetcher
-- Kraken Historical Data Fetcher
-- Synthetic Option Chain Generator
 
 ### Hedging Strategies (`src/deep_hedging/`, `src/ais_hedging/`)
 - Deep Hedging with Neural Networks
@@ -58,16 +54,7 @@ This repository implements a comprehensive framework for option pricing, stochas
 - Avellaneda-Stoikov Market Making
 - Reinforcement Learning Market Making Strategies
 
-## Installation
 
-```bash
-# Clone the repository
-git clone <repository-url>
-cd adversarial_avellaneda_stoikov
-
-# Install dependencies
-pip install -r requirements.txt
-```
 
 ## Usage
 
@@ -100,40 +87,7 @@ chain = generator.generate_single_chain(
 )
 ```
 
-### Example: Fetch Historical Crypto Data
 
-```python
-from calibration.data import KrakenFetcher
-
-fetcher = KrakenFetcher()
-
-# Get daily Bitcoin data
-btc_daily = fetcher.get_ohlcv('XXBTZUSD', interval=1440, days=365)
-
-# Get 5-minute data (last 7 days only)
-btc_5min = fetcher.get_ohlcv('XXBTZUSD', interval=5, days=7)
-```
-
-### Example: Heston Model Simulation
-
-```python
-from processes import Heston
-
-heston = Heston(
-    kappa=4.0,
-    theta=0.09,
-    xi=0.5,
-    rho=-0.7,
-    v0=0.09,
-)
-
-S_paths, v_paths = heston.simulate(
-    S0=100.0,
-    T=1.0,
-    n_steps=252,
-    n_paths=1000,
-)
-```
 
 ## Project Structure
 
@@ -195,9 +149,6 @@ The experiments implement a **two-layer calibration → simulation pipeline** wh
 │ Layer 1: Regime │         │ Layer 2: Micro- │
 │ Calibration     │         │ structure Calib │
 │                 │         │                 │
-│ • σ_stable      │         │ • λ₀            │
-│ • σ_volatile    │         │ • κ             │
-│ • Transitions   │         │ • Trade size    │
 └────────┬────────┘         └────────┬────────┘
          │                           │
          │ SAVES                    │ SAVES
@@ -220,10 +171,6 @@ The experiments implement a **two-layer calibration → simulation pipeline** wh
 **Script:** `calibration/btc_regime_calibration.py`
 
 Calibrates regime-switching parameters from **Kraken BTC-USD 30-minute OHLCV data**:
-- K-means clustering on rolling volatility
-- **Stable regime**: σ = 22.53% annualized
-- **Volatile regime**: σ = 53.05% annualized
-- Transition rate: 30/day (avg 48 min holding time)
 
 **Output:** `results/regime_parameters.csv`
 
@@ -244,17 +191,15 @@ Calibrates order flow from **Gemini BTC-USD tick data**:
 Compares two market making strategies facing a **strategic predatory trader** over 12 hours (1,000 Monte Carlo paths):
 
 **Vanilla AS** (unaware of predator):
-- Uses actual volatility σ in standard Avellaneda-Stoikov formula
 
 **Equilibrium AS** (aware of predator):
-- Uses **effective volatility**: σ_eff² = σ² + ξγ
-- Based on "Risk Isomorphism" principle from paper
+
 
 **Key Results:**
 
 | Metric | Vanilla AS | Equilibrium AS | Improvement |
 |--------|-----------|----------------|-------------|
-| Mean PnL | $1,436 | $3,032 | **+111%** 🚀 |
+| Mean PnL | $1,436 | $3,032 | **+111%**  |
 | Sharpe Ratio | 0.775 | 1.223 | **+58%** |
 | Avg Spread | 3.20 bps | 5.55 bps | +73% |
 
@@ -298,14 +243,3 @@ python adversarial_as/demo_counterfactual_simulation.py
 Two data files must be present in project root (verified with `check_data.py`):
 - `kraken_btcusd_30m_7d.csv` - Kraken 30-min OHLCV (Dec 7-14, 2025)
 - `gemini_btcusd_full.parquet` - Gemini tick data (Dec 14, 2025)
-
-### Key Theoretical Insights
-
-1. **Risk Isomorphism**: Predator's adversarial drift w*(q) = -ξγq is mathematically equivalent to additional volatility: σ_eff² = σ² + ξγ
-
-2. **Strategic Spread Widening**: Equilibrium AS quotes 73% wider spreads to compensate for predatory risk, earning more profit per trade despite fewer fills
-
-3. **Mean-Averting Predator**: Optimal predator pushes price down when MM is long (q > 0), up when short (q < 0), maximizing MM's losses
-
-4. **Automatic Calibration Flow**: Parameters from real BTC market data automatically flow into simulation with no manual copying required
-
