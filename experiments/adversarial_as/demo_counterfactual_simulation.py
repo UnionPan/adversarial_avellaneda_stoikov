@@ -137,9 +137,9 @@ def load_calibrated_parameters():
     """
     # Default values (fallback)
     params = {
-        'SIGMA_STABLE': 0.225271,
-        'SIGMA_VOLATILE': 0.530462,
-        'BASE_TRANSITION_RATE': 30.0,
+        'SIGMA_STABLE': 0.231437,
+        'SIGMA_VOLATILE': 0.704989,
+        'BASE_TRANSITION_RATE': 3.829900,
         'LAMBDA_0': 250_000,
         'KAPPA': 10.0,
         'AVG_TRADE_SIZE': 0.05,
@@ -150,10 +150,12 @@ def load_calibrated_parameters():
         'microstructure': 'default',
     }
 
-    # Try to load regime parameters
+    # Resolve relative to THIS file (not the shell CWD) so the same canonical
+    # parameters load regardless of where the script is launched.
+    _here = Path(__file__).resolve().parent
     regime_paths = [
-        '../results/regime_parameters.csv',
-        '../../results/regime_parameters.csv',
+        _here.parent / 'results' / 'regime_parameters.csv',
+        _here.parent.parent / 'results' / 'regime_parameters.csv',
     ]
 
     for path in regime_paths:
@@ -173,8 +175,8 @@ def load_calibrated_parameters():
 
     # Try to load microstructure parameters
     micro_paths = [
-        '../results/microstructure_parameters.csv',
-        '../../results/microstructure_parameters.csv',
+        _here.parent / 'results' / 'microstructure_parameters.csv',
+        _here.parent.parent / 'results' / 'microstructure_parameters.csv',
     ]
 
     for path in micro_paths:
@@ -210,7 +212,7 @@ KAPPA = calibrated_params['KAPPA']
 AVG_TRADE_SIZE = calibrated_params['AVG_TRADE_SIZE']
 
 # Predator parameters and risk aversion
-XI = 20.0                    # Predator cost coefficient (ξ·γ = 0.4 for strong predator effect)
+XI = 10.0                    # Predator cost coefficient (ξ·γ = 0.2, matches manuscript §5.3 / §5.4 base)
 GAMMA = 0.02                 # Risk aversion (MM spread calculation - tighter spreads)
 
 # Simulation parameters
@@ -288,9 +290,9 @@ class CounterfactualSimulator:
         mu_01 = BASE_TRANSITION_RATE  # Stable → Volatile
         mu_10 = BASE_TRANSITION_RATE  # Volatile → Stable
 
-        # Convert to per-timestep probability
-        p_01 = mu_01 * DT_ANNUAL
-        p_10 = mu_10 * DT_ANNUAL
+        # Convert per-DAY rate to per-timestep switch probability (dt in days, not years).
+        p_01 = 1.0 - np.exp(-mu_01 * DT_SECONDS / 86400.0)
+        p_10 = 1.0 - np.exp(-mu_10 * DT_SECONDS / 86400.0)
 
         for i in range(1, n_steps):
             if regimes[i-1] == 0:  # Currently stable
@@ -592,6 +594,61 @@ results_dir.mkdir(exist_ok=True)
 output_path = results_dir / 'counterfactual_simulation_results.png'
 plt.savefig(str(output_path), dpi=150, bbox_inches='tight')
 print(f"\n✓ Saved visualization: {output_path.relative_to(project_root)}")
+
+# ----------------------------------------------------------------------------
+# Standalone manuscript figures (Class A: written to experiments/results/ only;
+# copy MANUALLY into notes/.../figs/). Reproduces the three illustrative
+# Section 5.3 figures: bidask.png, inventorydyn.png, pnl.png.
+# ----------------------------------------------------------------------------
+import matplotlib.dates as mdates
+
+# (a) bidask.png : price evolution with equilibrium AS spread band (10x for visibility)
+fig_b, axb = plt.subplots(figsize=(11, 4.2))
+for i in range(len(time_labels) - 1):
+    color = 'red' if example['regimes'][i] == 1 else 'green'
+    axb.plot([time_labels[i], time_labels[i+1]], [example['S'][i], example['S'][i+1]],
+             color=color, linewidth=2.0, alpha=0.85, zorder=3)
+axb.fill_between(time_labels[:-1], enhanced_bids, enhanced_asks,
+                color='blue', alpha=0.2, label=f'Bid-ask spread (×{spread_multiplier})', zorder=2)
+axb.set_ylabel('Price ($)'); axb.set_xlabel('Time')
+axb.set_title('Price evolution with equilibrium AS spread band (green = stable, red = volatile)')
+axb.grid(True, alpha=0.3); axb.set_xlim([time_labels[0], time_labels[-1]])
+axb.legend(loc='upper left')
+axb.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+fig_b.autofmt_xdate(); fig_b.tight_layout()
+fig_b.savefig(str(results_dir / 'bidask.png'), dpi=150, bbox_inches='tight')
+plt.close(fig_b)
+
+# (b) inventorydyn.png : optimal spread (top) + inventory (bottom)
+fig_i, (axs, axq) = plt.subplots(2, 1, figsize=(11, 6.0), sharex=True)
+axs.plot(time_labels[:-1], example['spreads'][:-1] * 10000, color='orange', linewidth=1.8)
+axs.set_ylabel('Spread (bps)'); axs.grid(True, alpha=0.3)
+axs.set_title('Optimal spread strategy and inventory dynamics (equilibrium AS under SP adverse selection)')
+axq.plot(time_labels, example['q'], color='purple', linewidth=1.8)
+axq.axhline(0, color='black', linestyle='--', alpha=0.3)
+axq.set_ylabel('Inventory (BTC)'); axq.set_xlabel('Time'); axq.grid(True, alpha=0.3)
+axq.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+fig_i.autofmt_xdate(); fig_i.tight_layout()
+fig_i.savefig(str(results_dir / 'inventorydyn.png'), dpi=150, bbox_inches='tight')
+plt.close(fig_i)
+
+# (c) pnl.png : terminal-PnL distribution, vanilla vs equilibrium
+fig_p, axp = plt.subplots(figsize=(9, 5.0))
+axp.hist(vanilla_pnls, bins=bins, alpha=0.5, label='Vanilla AS', color='red', edgecolor='black')
+axp.hist(equilibrium_pnls, bins=bins, alpha=0.5, label='Equilibrium AS', color='blue', edgecolor='black')
+axp.axvline(vanilla_pnls.mean(), color='red', linestyle='--', linewidth=2,
+            label=f'Vanilla mean: ${vanilla_pnls.mean():.0f}')
+axp.axvline(equilibrium_pnls.mean(), color='blue', linestyle='--', linewidth=2,
+            label=f'Equilibrium mean: ${equilibrium_pnls.mean():.0f}')
+axp.set_xlabel('Terminal PnL ($)'); axp.set_ylabel('Frequency')
+axp.set_title(f'Terminal PnL distribution ({N_TRAJECTORIES} paths)')
+axp.legend(); axp.grid(True, alpha=0.3)
+fig_p.tight_layout()
+fig_p.savefig(str(results_dir / 'pnl.png'), dpi=150, bbox_inches='tight')
+plt.close(fig_p)
+
+print(f"✓ Saved standalone figures (bidask.png, inventorydyn.png, pnl.png) -> {results_dir.relative_to(project_root)}")
+print("  (Class A: copy these manually into notes/.../figs/ as needed.)")
 
 # ============================================================================
 # Step 6: Export Results
